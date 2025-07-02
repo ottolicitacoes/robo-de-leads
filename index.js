@@ -1,4 +1,4 @@
-// index.js - VERSÃO FINAL DE LANÇAMENTO
+// index.js - VERSÃO FINAL COM A LÓGICA DE EXCLUSÃO DO USUÁRIO
 
 const express = require('express');
 const cors = require('cors');
@@ -14,24 +14,43 @@ if (!process.env.GEMINI_API_KEY) {
 }
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Função da IA, agora otimizada para analisar pequenos blocos de HTML
-async function analisarBlocoHtmlComIA(blocoHtml) {
+async function analisarBlocoHtmlComIA_Exclusao(blocoHtml) {
   try {
-    console.log("Robô: Enviando bloco HTML para a IA...");
+    console.log("Robô: Enviando bloco para IA com lógica de exclusão...");
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const prompt = `Você é um especialista em analisar trechos de HTML de portais de licitação. No trecho de HTML a seguir, encontre a empresa e extraia as seguintes informações: 1. razaoSocial, 2. cnpj, 3. status (Ex: Desclassificada, Adjudicada, etc.). Retorne um único objeto JSON. Se não encontrar os dados, retorne null. TRECHO HTML: """${blocoHtml}"""`;
+    // ESTE É O NOVO PROMPT, BASEADO NA SUA IDEIA
+    const prompt = `
+      Analise o trecho de HTML a seguir de um portal de licitações. 
+      Primeiro, identifique o status da empresa (ex: Adjudicada, Desclassificada, Homologado, etc.).
+      Se o status for "Adjudicada", "Adjudicado", "Homologada", "Homologado", ou "Vencedor", retorne exatamente a palavra "null".
+      Para QUALQUER OUTRO status (incluindo "Desclassificada", "Inabilitada", ou se não houver status visível), extraia a "razaoSocial" e o "cnpj" e retorne como um objeto JSON.
+      TRECHO HTML: """${blocoHtml}"""
+    `;
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    const textoJson = response.text().replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(textoJson);
+    const textoResposta = response.text().trim();
+
+    if (textoResposta.toLowerCase() === 'null') {
+      console.log("Robô: IA identificou um vencedor. Ignorando.");
+      return null;
+    }
+
+    const dadosJson = JSON.parse(textoResposta.replace(/```json/g, '').replace(/```/g, ''));
+    console.log("Robô: IA identificou um lead:", dadosJson.razaoSocial);
+    return dadosJson;
+
   } catch (error) {
-    console.error("Robô: Erro ao analisar bloco com a IA:", error);
+    console.error("Robô: Erro na análise com IA (Exclusão):", error);
     return null;
   }
 }
 
-// As outras funções de enriquecimento continuam as mesmas
-async function buscarDadosCNPJ(cnpj) { /* ...código igual ao anterior... */ 
+// As funções de enriquecimento não mudam
+async function buscarDadosCNPJ(cnpj) { /* ...código igual ao anterior... */ }
+function validarFormatoTelefone(numero) { /* ...código igual ao anterior... */ }
+
+// Recarregando as funções para não ter que rolar a tela
+async function buscarDadosCNPJ(cnpj) {
     if (!cnpj) return null;
     try {
         const url = `https://brasilapi.com.br/api/cnpj/v1/${cnpj.replace(/\D/g, '')}`;
@@ -39,34 +58,29 @@ async function buscarDadosCNPJ(cnpj) { /* ...código igual ao anterior... */
         return response.data;
     } catch (error) { return null; }
 }
-function validarFormatoTelefone(numero) { /* ...código igual ao anterior... */
+function validarFormatoTelefone(numero) {
     if (!numero) return "N/A";
     const n = String(numero).replace(/\D/g, '');
     return (n.length >= 10 && n.length <= 11) ? "Sim" : "Não";
 }
 
-// Endpoint principal: agora ele recebe os blocos de HTML
+// Endpoint principal
 app.post('/analisar', async (req, res) => {
-  console.log("Robô: Recebeu um pedido com blocos de HTML!");
   const pista = req.body.pista;
-
   if (!pista || pista.tipo !== 'blocos_html' || !pista.dados || pista.dados.length === 0) {
     return res.status(200).json([]);
   }
 
   const blocosHtml = pista.dados;
-  console.log(`Robô: Analisando ${blocosHtml.length} blocos de HTML...`);
+  console.log(`Robô: Analisando ${blocosHtml.length} blocos com lógica de exclusão...`);
 
   const promessasDeEnriquecimento = blocosHtml.map(async (bloco) => {
-    const dadosIniciais = await analisarBlocoHtmlComIA(bloco);
+    const dadosIniciais = await analisarBlocoHtmlComIA_Exclusão(bloco);
 
-    // Só continua se a IA encontrou uma empresa e ela está desclassificada
-    if (!dadosIniciais || !dadosIniciais.status || !dadosIniciais.status.toLowerCase().includes('desclassificada')) {
-      return null;
-    }
+    if (!dadosIniciais || !dadosIniciais.cnpj) return null; // Ignora se for null ou não tiver CNPJ
 
     const dadosEmpresa = await buscarDadosCNPJ(dadosIniciais.cnpj);
-    if (!dadosEmpresa) return { "Razão Social": dadosIniciais.razaoSocial, "CNPJ": dadosIniciais.cnpj, "Status": dadosIniciais.status };
+    if (!dadosEmpresa) return { "Razão Social": dadosIniciais.razaoSocial, "CNPJ": dadosIniciais.cnpj, "Status": "Não Vencedor" };
 
     const socioAdmin = dadosEmpresa.qsa?.find(s => s.qualificacao_socio.includes('Administrador')) || dadosEmpresa.qsa?.[0];
     const nomeDecisor = socioAdmin ? socioAdmin.nome_socio : "Não encontrado";
@@ -74,7 +88,7 @@ app.post('/analisar', async (req, res) => {
     return {
       "Razão Social": dadosEmpresa.razao_social,
       "CNPJ": dadosEmpresa.cnpj,
-      "Status": dadosIniciais.status,
+      "Status": "Não Vencedor",
       "Decisor (Sócio)": nomeDecisor,
       "Busca Contato": socioAdmin ? `https://www.google.com/search?q=${encodeURIComponent(nomeDecisor)}+${encodeURIComponent(dadosEmpresa.razao_social)}+telefone+whatsapp` : "N/A",
       "Telefone Cadastrado": dadosEmpresa.ddd_telefone_1 || "N/A",
@@ -91,5 +105,5 @@ app.post('/analisar', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor do robô (VERSÃO FINALÍSSIMA) rodando na porta ${PORT}`);
+  console.log(`Servidor do robô (VERSÃO FINAL COM FILTRO DE EXCLUSÃO) rodando na porta ${PORT}`);
 });
