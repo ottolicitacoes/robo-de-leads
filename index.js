@@ -1,126 +1,112 @@
-M
-My Workspace
-robo-de-leads
-Menu
+// index.js - A VERSÃO FINAL E COMPLETA DO SUPER-ROBÔ
 
-Search
-Ctrl+
-K
+const express = require('express');
+const cors = require('cors');
+const axios = require('axios');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-New
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '5mb' }));
 
-Upgrade
+if (!process.env.GEMINI_API_KEY) {
+  throw new Error("ERRO CRÍTICO: A variável de ambiente GEMINI_API_KEY não foi definida!");
+}
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// --- NOSSAS NOVAS FUNÇÕES DE DETETIVE ---
 
-o
-Dashboard
-robo-de-leads
-Events
-Settings
-Monitor
-Logs
-Metrics
-Manage
-Environment
-Shell
-Scaling
-Previews
-Disks
-Jobs
+// Função 1: Usa a IA para achar os CNPJs na página
+async function extrairCNPJsComIA(textoDaPagina) {
+  try {
+    console.log("Robô: Usando IA para encontrar CNPJs...");
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const prompt = `Analise o texto a seguir e extraia TODOS os números de CNPJ únicos (formato XX.XXX.XXX/XXXX-XX) que você encontrar. Retorne apenas uma lista em formato JSON, como ["cnpj1", "cnpj2", ...]. Texto: """${textoDaPagina.substring(0, 30000)}"""`;
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const textoJson = response.text().replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(textoJson);
+  } catch (error) {
+    console.error("Robô: Erro ao extrair CNPJs com IA:", error);
+    return [];
+  }
+}
 
-Changelog
-Invite a friend
+// Função 2: Busca os dados de um CNPJ em uma API pública
+async function buscarDadosCNPJ(cnpj) {
+  try {
+    console.log(`Robô: Buscando dados para o CNPJ ${cnpj}...`);
+    const url = `https://brasilapi.com.br/api/cnpj/v1/${cnpj.replace(/\D/g, '')}`;
+    const response = await axios.get(url);
+    return response.data;
+  } catch (error) {
+    console.error(`Robô: Erro ao buscar dados do CNPJ ${cnpj}:`, error.message);
+    return null;
+  }
+}
 
-Contact support
-Render Status
-Web Service
-robo-de-leads
-Node
-Free
-Upgrade your instance
+// Função 3: Valida o formato de um telefone
+function validarFormatoTelefone(numero) {
+    if (!numero) return "Não";
+    const numeroLimpo = String(numero).replace(/\D/g, '');
+    // Verifica se tem 10 (fixo) ou 11 (celular) dígitos
+    if (numeroLimpo.length >= 10 && numeroLimpo.length <= 11) {
+        return "Sim";
+    }
+    return "Não";
+}
 
-Connect
+// --- O ENDEREÇO PRINCIPAL DO ROBÔ (AGORA ORQUESTRANDO TUDO) ---
+app.post('/analisar', async (req, res) => {
+  console.log("Robô: Recebeu um pedido de análise e enriquecimento completo!");
+  const textoDaPagina = req.body.textoDaPagina;
 
-Manual Deploy
-ottolicitacoes / robo-de-leads
-main
-https://robo-de-leads.onrender.com
+  if (!textoDaPagina) {
+    return res.status(400).json([]);
+  }
 
-Your free instance will spin down with inactivity, which can delay requests by 50 seconds or more.
-Upgrade now
+  // Etapa 1: Usar a IA para extrair todos os CNPJs da página
+  const cnpjsEncontrados = await extrairCNPJsComIA(textoDaPagina);
 
-All logs
-Search
-Search
+  if (!cnpjsEncontrados || cnpjsEncontrados.length === 0) {
+    return res.status(200).json([]);
+  }
 
-Live tail
-GMT-4
+  console.log(`Robô: IA encontrou ${cnpjsEncontrados.length} CNPJs. Iniciando enriquecimento...`);
 
-Menu
+  // Etapa 2: Para cada CNPJ, buscar as informações em paralelo
+  const promessasDeEnriquecimento = cnpjsEncontrados.map(async (cnpj) => {
+    const dadosEmpresa = await buscarDadosCNPJ(cnpj);
+    if (!dadosEmpresa) return null;
 
-     ==> Deploying...
-==> Running 'node index.js'
-Servidor do robô (versão Super-Analista com trava de segurança) rodando na porta 10000
-     ==> Your service is live 🎉
-     ==> 
-     ==> ///////////////////////////////////////////////////////////
-     ==> 
-     ==> Available at your primary URL https://robo-de-leads.onrender.com
-     ==> 
-     ==> ///////////////////////////////////////////////////////////
-Robô: Recebeu um pedido de análise de página completa!
-Robô: Enviando texto da página para análise da IA...
-Robô: Erro ao analisar com a IA: TypeError: Headers.append: "curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent" \
-  -H 'Content-Type: application/json' \
-  -H 'X-goog-api-key: GEMINI_API_KEY' \
-  -X POST \
-  -d '{
-    "contents": [
-      {
-Robô: Análise completa. Enviando resultado de volta.
-        "parts": [
-          {
-            "text": "Explain how AI works in a few words"
-          }
-        ]
-      }
-    ]
-  }'" is an invalid header value.
-    at webidl.errors.exception (node:internal/deps/undici/undici:3610:14)
-    at webidl.errors.invalidArgument (node:internal/deps/undici/undici:3621:28)
-    at appendHeader (node:internal/deps/undici/undici:8652:29)
-    at _Headers.append (node:internal/deps/undici/undici:8862:16)
-    at getHeaders (/opt/render/project/src/node_modules/@google/generative-ai/dist/index.js:358:13)
-    at constructModelRequest (/opt/render/project/src/node_modules/@google/generative-ai/dist/index.js:385:124)
-    at makeModelRequest (/opt/render/project/src/node_modules/@google/generative-ai/dist/index.js:391:41)
-    at generateContent (/opt/render/project/src/node_modules/@google/generative-ai/dist/index.js:867:28)
-    at GenerativeModel.generateContent (/opt/render/project/src/node_modules/@google/generative-ai/dist/index.js:1377:16)
-    at analisarTextoComIA (/opt/render/project/src/index.js:29:36)
-     ==> Detected service running on port 10000
-     ==> Docs on specifying a port: https://render.com/docs/web-services#port-binding
-     ==> Deploying...
-==> Running 'node index.js'
-Servidor do robô (versão Super-Analista com trava de segurança) rodando na porta 10000
-     ==> Your service is live 🎉
-     ==> 
-     ==> ///////////////////////////////////////////////////////////
-     ==> 
-     ==> Available at your primary URL https://robo-de-leads.onrender.com
-     ==> 
-     ==> ///////////////////////////////////////////////////////////
-Robô: Recebeu um pedido de análise de página completa!
-Robô: Enviando texto da página para análise da IA...
-Robô: Análise da IA concluída.
-Robô: Análise completa. Enviando resultado de volta.
-Robô: Recebeu um pedido de análise de página completa!
-Robô: Enviando texto da página para análise da IA...
-Robô: Análise da IA concluída.
-Robô: Análise completa. Enviando resultado de volta.
-Need better ways to work with logs? Try theRender CLIor set up a log stream integration 
+    // Etapa 3: Identificar o decisor (sócio administrador)
+    const socioAdmin = dadosEmpresa.qsa?.find(socio => socio.qualificacao_socio.includes('Administrador')) || dadosEmpresa.qsa?.[0];
+    const nomeDecisor = socioAdmin ? socioAdmin.nome_socio : "N/A";
 
-0 services selected:
+    // Etapa 4: Montar o link de busca pelo contato
+    const buscaGoogle = `https://www.google.com/search?q=${encodeURIComponent(nomeDecisor)}+${encodeURIComponent(dadosEmpresa.razao_social)}+telefone`;
 
-Move
+    return {
+      "CNPJ": dadosEmpresa.cnpj,
+      "Razao Social": dadosEmpresa.razao_social,
+      "Atividade Principal": dadosEmpresa.cnae_fiscal_descricao,
+      "Decisor (Sócio)": nomeDecisor,
+      "Telefone 1": dadosEmpresa.ddd_telefone_1,
+      "Telefone 1 Válido?": validarFormatoTelefone(dadosEmpresa.ddd_telefone_1),
+      "Busca Contato": buscaGoogle,
+      "UF": dadosEmpresa.uf,
+    };
+  });
 
-Generate Blueprint
+  // Espera todas as buscas terminarem
+  const resultadosFinais = (await Promise.all(promessasDeEnriquecimento)).filter(Boolean); // filter(Boolean) remove os nulos
 
+  console.log(`Robô: Enriquecimento completo. Enviando ${resultadosFinais.length} leads de volta.`);
+  res.status(200).json(resultadosFinais);
+});
+
+// --- LIGANDO O SERVIDOR ---
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Servidor do robô (versão GRAND FINALE) rodando na porta ${PORT}`);
+});
