@@ -1,73 +1,65 @@
+// index.js - Versão Otimizada para Baixa Memória
+
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// --- CONFIGURAÇÃO ---
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// --- FUNÇÕES DE AJUDA ---
-
-// Função para visitar uma página, clicar em tudo e extrair o texto
 async function buscarConteudoComPuppeteer(url) {
-  console.log(`Robô: Abrindo navegador invisível para visitar: ${url}`);
+  console.log(`Robô: Iniciando busca com Puppeteer para: ${url}`);
   let browser = null;
   try {
-    // Configurações especiais para o Puppeteer rodar no ambiente do Render.com
-    browser = await puppeteer.launch({
+    // Argumentos de otimização para rodar em ambientes como o Render
+    const launchOptions = {
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--single-process'
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',
+        '--disable-gpu'
       ],
-      headless: true // Roda sem interface gráfica
-    });
+      headless: true
+    };
 
+    console.log("Robô: 1. Lançando o navegador...");
+    browser = await puppeteer.launch(launchOptions);
+
+    console.log("Robô: 2. Navegador lançado. Abrindo nova página...");
     const page = await browser.newPage();
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 }); // Espera a página carregar
 
-    console.log("Robô: Página carregada. Tentando expandir todos os elementos clicáveis...");
+    console.log("Robô: 3. Página aberta. Navegando para a URL...");
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // Tenta clicar em elementos que parecem ser expansíveis para revelar conteúdo
-    await page.evaluate(() => {
-      const selectors = 'button, a, span, div[role="button"]';
-      document.querySelectorAll(selectors).forEach(element => {
-        // Clica em elementos que tenham palavras como "detalhes", "propostas", etc.
-        if (element.innerText.toLowerCase().match(/detalhes|propostas|expandir|ver|ata|documento/)) {
-          element.click();
-        }
-      });
-    });
-
-    // Espera um pouco para o conteúdo aparecer após os cliques
-    await new Promise(r => setTimeout(r, 2000)); 
-
-    console.log("Robô: Extraindo texto da página completa...");
+    console.log("Robô: 4. Página carregada. Extraindo texto...");
     const textoCompleto = await page.evaluate(() => document.body.innerText);
 
+    console.log("Robô: 5. Extração concluída com sucesso.");
     return textoCompleto;
+
   } catch (error) {
-    console.error(`Robô: Erro ao usar o Puppeteer na URL ${url}:`, error.message);
+    console.error(`Robô: Erro CRÍTICO no Puppeteer na URL ${url}:`, error);
     return null;
   } finally {
     if (browser) {
-      await browser.close(); // Garante que o navegador invisível seja sempre fechado
-      console.log("Robô: Navegador invisível fechado.");
+      await browser.close();
+      console.log("Robô: 6. Navegador invisível fechado.");
     }
   }
 }
 
-// Função da IA (sem alterações)
+// A função da IA continua a mesma que antes...
 async function analisarTextoComIA(texto) {
-  // ... (código da função da IA que já tínhamos) ...
-  // ... (para economizar espaço, não vou colar de novo, mas ela continua aqui) ...
-   if (!texto || texto.length < 50) {
-    return [{ erro: "Conteúdo da página insuficiente para análise." }];
-  }
+  // (O código completo da função da IA que já temos)
+  if (!texto || texto.length < 50) return [{ erro: "Conteúdo da página insuficiente para análise." }];
   try {
     console.log("Robô: Enviando texto para a IA do Gemini...");
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
@@ -83,26 +75,23 @@ async function analisarTextoComIA(texto) {
   }
 }
 
-// --- O ENDEREÇO PRINCIPAL DO ROBÔ ---
+// O Endpoint principal (sem grandes mudanças, apenas a chamada da nova função)
 app.post('/analisar', async (req, res) => {
-  console.log("Robô: Recebeu um pedido de análise com Puppeteer e IA!");
+  console.log("Robô: Recebeu um pedido de análise otimizado!");
   const pistas = req.body.pistas;
 
   if (!pistas || pistas.length === 0) {
     return res.status(400).json([{ message: "Nenhuma pista foi enviada." }]);
   }
 
+  // Iremos analisar todas as pistas em sequência
   const resultadosFinais = [];
-
-  // Agora, vamos analisar TODAS as pistas, não apenas a primeira
   for (const url of pistas) {
     const conteudoDaPagina = await buscarConteudoComPuppeteer(url);
     if (conteudoDaPagina) {
       const analiseIA = await analisarTextoComIA(conteudoDaPagina);
-      // Adiciona a URL de origem ao resultado para sabermos de onde veio
-      if (Array.isArray(analiseIA)) {
-         analiseIA.forEach(item => item.fonte = url);
-         resultadosFinais.push(...analiseIA);
+      if (analiseIA && !analiseIA.erro) {
+        resultadosFinais.push(...analiseIA);
       }
     }
   }
@@ -111,8 +100,7 @@ app.post('/analisar', async (req, res) => {
   res.status(200).json(resultadosFinais);
 });
 
-// --- LIGANDO O SERVIDOR ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor do robô (versão com Puppeteer) rodando na porta ${PORT}`);
+  console.log(`Servidor do robô (versão otimizada) rodando na porta ${PORT}`);
 });
