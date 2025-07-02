@@ -1,12 +1,12 @@
-// index.js - A VERSÃO FINALÍSSIMA, QUE ENTENDE DIFERENTES ESTRATÉGIAS
+// index.js - VERSÃO DE LANÇAMENTO FINAL
 
 const express = require('express');
 const cors = require('cors');
-const pdf = require('pdf-parse');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-// Vamos usar o axios para ler os PDFs, o Puppeteer não será mais necessário aqui
+const puppeteer = require('puppeteer');
 const axios = require('axios');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
+// --- CONFIGURAÇÃO ---
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -16,70 +16,115 @@ if (!process.env.GEMINI_API_KEY) {
 }
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-async function extrairTextoDePDF(url) {
+// --- FUNÇÕES DO DETETIVE ---
+
+// Função 1: Usa o Puppeteer para visitar a página de detalhes e extrair o texto completo
+async function extrairTextoDaPaginaDeDetalhes(url) {
+  console.log(`Robô: Abrindo navegador para extrair texto de: ${url}`);
+  let browser = null;
   try {
-    console.log(`Robô: Lendo PDF de: ${url}`);
-    const response = await axios.get(url, { responseType: 'arraybuffer' });
-    const data = await pdf(response.data);
-    return data.text;
+    const launchOptions = { args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--no-zygote'] };
+    browser = await puppeteer.launch(launchOptions);
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+    const textoCompleto = await page.evaluate(() => document.body.innerText);
+    return textoCompleto;
   } catch (error) {
-    console.error(`Robô: Erro ao ler PDF da URL ${url}:`, error.message);
-    return "";
+    console.error(`Robô: Erro no Puppeteer para a URL ${url}:`, error.message);
+    return null;
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
+// Função 2: Usa a IA para encontrar os dados da licitação no texto
 async function analisarTextoComIA(texto) {
-  // ... (código da função da IA continua o mesmo) ...
   if (!texto || texto.length < 20) return [];
   try {
-    console.log("Robô: Enviando texto para a IA...");
+    console.log("Robô: Enviando texto para IA para análise da licitação...");
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const prompt = `Você é um especialista em analisar documentos de licitações. Analise o texto a seguir. Sua tarefa é encontrar TODAS as empresas com status "Desclassificada" ou "Inabilitada". Para cada empresa, extraia: 1. razaoSocial, 2. cnpj (se houver), 3. motivoDaPerda (resumido). Retorne um array de objetos JSON. Se não encontrar nada, retorne um array vazio []. TEXTO: """ ${texto.substring(0, 50000)} """`;
+    const prompt = `Analise o texto a seguir, extraído de uma página de detalhes de licitação. Sua tarefa é encontrar a empresa com status "Desclassificada" ou "Inabilitada" e extrair as seguintes informações: razaoSocial, cnpj, motivoDaPerda (resumido), objetoDaLicitacao (resumido), orgaoLicitante, modalidade, e numeroDoProcesso. Retorne um array com um único objeto JSON contendo estes dados. Se não encontrar, retorne um array vazio []. TEXTO: """${texto}"""`;
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const textoJson = response.text().replace(/```json/g, '').replace(/```/g, '').trim();
     return JSON.parse(textoJson);
   } catch (error) {
     console.error("Robô: Erro ao analisar com a IA:", error);
-    return [{ erro: `Falha na análise da IA: ${error.message}` }];
+    return [];
   }
 }
 
-app.post('/analisar', async (req, res) => {
-  console.log("Robô: Recebeu um pedido com estratégia!");
-  const pista = req.body.pista;
+// Função 3: Usa uma API pública para enriquecer os dados do CNPJ
+async function buscarDadosCNPJ(cnpj) {
+  if (!cnpj) return null;
+  try {
+    console.log(`Robô: Buscando dados para o CNPJ ${cnpj}...`);
+    const url = `https://brasilapi.com.br/api/cnpj/v1/${cnpj.replace(/\D/g, '')}`;
+    const response = await axios.get(url, { timeout: 10000 });
+    return response.data;
+  } catch (error) {
+    return null;
+  }
+}
 
-  if (!pista || !pista.tipo || !pista.dados) {
+// Função 4: Valida o formato de um telefone
+function validarFormatoTelefone(numero) {
+    if (!numero) return "N/A";
+    const numeroLimpo = String(numero).replace(/\D/g, '');
+    return (numeroLimpo.length >= 10 && numeroLimpo.length <= 11) ? "Sim" : "Não";
+}
+
+// --- ENDPOINT PRINCIPAL ---
+app.post('/analisar', async (req, res) => {
+  console.log("Robô: Recebeu um pedido de análise final!");
+  // A extensão agora envia a URL da página de detalhes que está aberta
+  const urlDaPagina = req.body.urlDaPagina;
+
+  if (!urlDaPagina) {
     return res.status(400).json([]);
   }
 
-  let textoParaAnalisar = "";
-
-  if (pista.tipo === 'texto_completo') {
-    console.log("Robô: Processando pista do tipo 'texto_completo'.");
-    textoParaAnalisar = pista.dados;
-
-  } else if (pista.tipo === 'lista_de_urls') {
-    console.log(`Robô: Processando pista do tipo 'lista_de_urls' com ${pista.dados.length} links.`);
-    // Para cada URL, baixa o conteúdo (assumindo que são PDFs por enquanto) e junta o texto
-    let textosCombinados = [];
-    for (const url of pista.dados) {
-      const textoDoPDF = await extrairTextoDePDF(url);
-      textosCombinados.push(textoDoPDF);
-    }
-    textoParaAnalisar = textosCombinados.join("\n\n --- FIM DO DOCUMENTO --- \n\n");
+  // Etapa 1: Extrair o texto da página com Puppeteer
+  const textoDaPagina = await extrairTextoDaPaginaDeDetalhes(urlDaPagina);
+  if (!textoDaPagina) {
+    return res.status(200).json([]);
   }
 
-  if (textoParaAnalisar) {
-    const resultadosFinais = await analisarTextoComIA(textoParaAnalisar);
-    console.log(`Robô: Análise da estratégia completa. Enviando ${resultadosFinais.length} resultados.`);
-    res.status(200).json(resultadosFinais);
-  } else {
-    res.status(200).json([]);
+  // Etapa 2: Usar a IA para extrair os dados básicos da licitação
+  const dadosDaLicitacao = await analisarTextoComIA(textoDaPagina);
+  if (dadosDaLicitacao.length === 0) {
+    return res.status(200).json([]);
   }
+
+  const lead = dadosDaLicitacao[0];
+
+  // Etapa 3: Enriquecer com dados da empresa e do decisor
+  const dadosEmpresa = await buscarDadosCNPJ(lead.cnpj);
+  let leadFinal = { ...lead };
+
+  if (dadosEmpresa) {
+    const socioAdmin = dadosEmpresa.qsa?.find(s => s.qualificacao_socio.includes('Administrador')) || dadosEmpresa.qsa?.[0];
+    const nomeDecisor = socioAdmin ? socioAdmin.nome_socio : "Não encontrado";
+
+    leadFinal = {
+      "Razão Social": dadosEmpresa.razao_social,
+      "CNPJ": dadosEmpresa.cnpj,
+      "Status": "Desclassificada/Inabilitada",
+      "Motivo (IA)": lead.motivoDaPerda,
+      "Objeto (IA)": lead.objetoDaLicitacao,
+      "Órgão Licitante": lead.orgaoLicitante,
+      "Decisor (Sócio)": nomeDecisor,
+      "Contato (Busca)": `https://www.google.com/search?q=${encodeURIComponent(nomeDecisor)}+${encodeURIComponent(dadosEmpresa.razao_social)}+telefone+whatsapp`,
+      "Telefone Cadastrado": dadosEmpresa.ddd_telefone_1 || "N/A",
+      "Formato Válido?": validarFormatoTelefone(dadosEmpresa.ddd_telefone_1)
+    };
+  }
+
+  console.log("Robô: Enriquecimento completo. Enviando lead final.");
+  res.status(200).json([leadFinal]); // Retorna sempre um array
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor do robô (versão CAMALEÃO FINAL) rodando na porta ${PORT}`);
+  console.log(`Servidor do robô (VERSÃO FINAL DE LANÇAMENTO) rodando na porta ${PORT}`);
 });
