@@ -1,4 +1,4 @@
-// index.js - A VERSÃO FINAL, SIMPLES E ROBUSTA
+// index.js - VERSÃO FINAL DE LANÇAMENTO
 
 const express = require('express');
 const cors = require('cors');
@@ -7,15 +7,31 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '10mb' }));
 
 if (!process.env.GEMINI_API_KEY) {
   throw new Error("ERRO CRÍTICO: GEMINI_API_KEY não definida!");
 }
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// As funções de enriquecimento continuam as mesmas
-async function buscarDadosCNPJ(cnpj) { /* ...código da função igual ao anterior... */ 
+// Função da IA, agora otimizada para analisar pequenos blocos de HTML
+async function analisarBlocoHtmlComIA(blocoHtml) {
+  try {
+    console.log("Robô: Enviando bloco HTML para a IA...");
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const prompt = `Você é um especialista em analisar trechos de HTML de portais de licitação. No trecho de HTML a seguir, encontre a empresa e extraia as seguintes informações: 1. razaoSocial, 2. cnpj, 3. status (Ex: Desclassificada, Adjudicada, etc.). Retorne um único objeto JSON. Se não encontrar os dados, retorne null. TRECHO HTML: """${blocoHtml}"""`;
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const textoJson = response.text().replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(textoJson);
+  } catch (error) {
+    console.error("Robô: Erro ao analisar bloco com a IA:", error);
+    return null;
+  }
+}
+
+// As outras funções de enriquecimento continuam as mesmas
+async function buscarDadosCNPJ(cnpj) { /* ...código igual ao anterior... */ 
     if (!cnpj) return null;
     try {
         const url = `https://brasilapi.com.br/api/cnpj/v1/${cnpj.replace(/\D/g, '')}`;
@@ -23,63 +39,57 @@ async function buscarDadosCNPJ(cnpj) { /* ...código da função igual ao anteri
         return response.data;
     } catch (error) { return null; }
 }
-function validarFormatoTelefone(numero) { /* ...código da função igual ao anterior... */
+function validarFormatoTelefone(numero) { /* ...código igual ao anterior... */
     if (!numero) return "N/A";
     const n = String(numero).replace(/\D/g, '');
     return (n.length >= 10 && n.length <= 11) ? "Sim" : "Não";
 }
 
-// A função da IA que recebe o texto completo
-async function analisarTextoComIA(texto) {
-  if (!texto || texto.length < 20) return [];
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const prompt = `Você é um especialista em analisar textos de páginas de licitações. No texto a seguir, encontre TODAS as empresas com status "Desclassificada" ou "Inabilitada". Para cada uma, extraia: 1. razaoSocial, 2. cnpj (se houver), 3. motivoDaPerda (resumido), 4. objetoDaLicitacao (resumido), 5. orgaoLicitante, 6. modalidade, 7. numeroDoProcesso. Retorne um array de objetos JSON. Se não encontrar nada, retorne um array vazio []. TEXTO: """ ${texto} """`;
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const textoJson = response.text().replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(textoJson);
-  } catch (error) {
-    return [{ erro: `Falha na análise da IA.` }];
-  }
-}
-
-// Endpoint principal: recebe o texto e orquestra as análises
+// Endpoint principal: agora ele recebe os blocos de HTML
 app.post('/analisar', async (req, res) => {
-  console.log("Robô: Recebeu um pedido de análise de texto.");
-  const textoDaPagina = req.body.textoDaPagina;
+  console.log("Robô: Recebeu um pedido com blocos de HTML!");
+  const pista = req.body.pista;
 
-  if (!textoDaPagina) return res.status(400).json([]);
+  if (!pista || pista.tipo !== 'blocos_html' || !pista.dados || pista.dados.length === 0) {
+    return res.status(200).json([]);
+  }
 
-  const leadsIniciais = await analisarTextoComIA(textoDaPagina);
-  if (leadsIniciais.length === 0) return res.status(200).json([]);
+  const blocosHtml = pista.dados;
+  console.log(`Robô: Analisando ${blocosHtml.length} blocos de HTML...`);
 
-  console.log(`Robô: IA encontrou ${leadsIniciais.length} leads iniciais. Enriquecendo...`);
+  const promessasDeEnriquecimento = blocosHtml.map(async (bloco) => {
+    const dadosIniciais = await analisarBlocoHtmlComIA(bloco);
 
-  const promessasDeEnriquecimento = leadsIniciais.map(async (lead) => {
-    const dadosEmpresa = await buscarDadosCNPJ(lead.cnpj);
-    if (!dadosEmpresa) return lead; // Retorna o lead básico se não encontrar dados do CNPJ
+    // Só continua se a IA encontrou uma empresa e ela está desclassificada
+    if (!dadosIniciais || !dadosIniciais.status || !dadosIniciais.status.toLowerCase().includes('desclassificada')) {
+      return null;
+    }
+
+    const dadosEmpresa = await buscarDadosCNPJ(dadosIniciais.cnpj);
+    if (!dadosEmpresa) return { "Razão Social": dadosIniciais.razaoSocial, "CNPJ": dadosIniciais.cnpj, "Status": dadosIniciais.status };
 
     const socioAdmin = dadosEmpresa.qsa?.find(s => s.qualificacao_socio.includes('Administrador')) || dadosEmpresa.qsa?.[0];
+    const nomeDecisor = socioAdmin ? socioAdmin.nome_socio : "Não encontrado";
+
     return {
-      "Razão Social": dadosEmpresa.razao_social || lead.razaoSocial,
-      "CNPJ": dadosEmpresa.cnpj || lead.cnpj,
-      "Status": "Desclassificada/Inabilitada",
-      "Motivo (IA)": lead.motivoDaPerda,
-      "Objeto (IA)": lead.objetoDaLicitacao,
-      "Órgão Licitante": lead.orgaoLicitante,
-      "Decisor (Sócio)": socioAdmin ? socioAdmin.nome_socio : "N/A",
-      "Contato (Busca)": socioAdmin ? `https://www.google.com/search?q=${encodeURIComponent(socioAdmin.nome_socio)}+${encodeURIComponent(dadosEmpresa.razao_social)}+telefone` : "N/A",
+      "Razão Social": dadosEmpresa.razao_social,
+      "CNPJ": dadosEmpresa.cnpj,
+      "Status": dadosIniciais.status,
+      "Decisor (Sócio)": nomeDecisor,
+      "Busca Contato": socioAdmin ? `https://www.google.com/search?q=${encodeURIComponent(nomeDecisor)}+${encodeURIComponent(dadosEmpresa.razao_social)}+telefone+whatsapp` : "N/A",
       "Telefone Cadastrado": dadosEmpresa.ddd_telefone_1 || "N/A",
-      "Formato Válido?": validarFormatoTelefone(dadosEmpresa.ddd_telefone_1)
+      "Formato Válido?": validarFormatoTelefone(dadosEmpresa.ddd_telefone_1),
+      "UF": dadosEmpresa.uf,
     };
   });
 
-  const resultadosFinais = await Promise.all(promessasDeEnriquecimento);
+  const resultadosFinais = (await Promise.all(promessasDeEnriquecimento)).filter(Boolean);
+
+  console.log(`Robô: Enriquecimento completo. Enviando ${resultadosFinais.length} leads de volta.`);
   res.status(200).json(resultadosFinais);
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor do robô (VERSÃO FINAL ROBUSTA) rodando na porta ${PORT}`);
+  console.log(`Servidor do robô (VERSÃO FINALÍSSIMA) rodando na porta ${PORT}`);
 });
