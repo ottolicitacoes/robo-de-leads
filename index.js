@@ -1,4 +1,4 @@
-// index.js - VERSÃO FINAL COM A LÓGICA DE EXCLUSÃO DO USUÁRIO
+// index.js - VERSÃO FINALÍSSIMA CORRIGIDA
 
 const express = require('express');
 const cors = require('cors');
@@ -14,18 +14,12 @@ if (!process.env.GEMINI_API_KEY) {
 }
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-async function analisarBlocoHtmlComIA_Exclusao(blocoHtml) {
+// Definindo a função com um nome simples sem acento
+async function analisarBlocoHtmlComIA(blocoHtml) {
   try {
     console.log("Robô: Enviando bloco para IA com lógica de exclusão...");
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    // ESTE É O NOVO PROMPT, BASEADO NA SUA IDEIA
-    const prompt = `
-      Analise o trecho de HTML a seguir de um portal de licitações. 
-      Primeiro, identifique o status da empresa (ex: Adjudicada, Desclassificada, Homologado, etc.).
-      Se o status for "Adjudicada", "Adjudicado", "Homologada", "Homologado", ou "Vencedor", retorne exatamente a palavra "null".
-      Para QUALQUER OUTRO status (incluindo "Desclassificada", "Inabilitada", ou se não houver status visível), extraia a "razaoSocial" e o "cnpj" e retorne como um objeto JSON.
-      TRECHO HTML: """${blocoHtml}"""
-    `;
+    const prompt = `Analise o trecho de HTML a seguir de um portal de licitações. Primeiro, identifique o status da empresa (ex: Adjudicada, Desclassificada, Homologado, etc.). Se o status for "Adjudicada", "Adjudicado", "Homologada", "Homologado", ou "Vencedor", retorne exatamente a palavra "null". Para QUALQUER OUTRO status (incluindo "Desclassificada", "Inabilitada", ou se não houver status visível), extraia a "razaoSocial" e o "cnpj" e retorne como um objeto JSON. TRECHO HTML: """${blocoHtml}"""`;
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const textoResposta = response.text().trim();
@@ -34,22 +28,15 @@ async function analisarBlocoHtmlComIA_Exclusao(blocoHtml) {
       console.log("Robô: IA identificou um vencedor. Ignorando.");
       return null;
     }
-
     const dadosJson = JSON.parse(textoResposta.replace(/```json/g, '').replace(/```/g, ''));
     console.log("Robô: IA identificou um lead:", dadosJson.razaoSocial);
     return dadosJson;
-
   } catch (error) {
     console.error("Robô: Erro na análise com IA (Exclusão):", error);
     return null;
   }
 }
 
-// As funções de enriquecimento não mudam
-async function buscarDadosCNPJ(cnpj) { /* ...código igual ao anterior... */ }
-function validarFormatoTelefone(numero) { /* ...código igual ao anterior... */ }
-
-// Recarregando as funções para não ter que rolar a tela
 async function buscarDadosCNPJ(cnpj) {
     if (!cnpj) return null;
     try {
@@ -64,7 +51,6 @@ function validarFormatoTelefone(numero) {
     return (n.length >= 10 && n.length <= 11) ? "Sim" : "Não";
 }
 
-// Endpoint principal
 app.post('/analisar', async (req, res) => {
   const pista = req.body.pista;
   if (!pista || pista.tipo !== 'blocos_html' || !pista.dados || pista.dados.length === 0) {
@@ -75,12 +61,13 @@ app.post('/analisar', async (req, res) => {
   console.log(`Robô: Analisando ${blocosHtml.length} blocos com lógica de exclusão...`);
 
   const promessasDeEnriquecimento = blocosHtml.map(async (bloco) => {
-    const dadosIniciais = await analisarBlocoHtmlComIA_Exclusão(bloco);
+    // CORREÇÃO: Chamando a função com o nome correto
+    const dadosIniciais = await analisarBlocoHtmlComIA(bloco);
 
-    if (!dadosIniciais || !dadosIniciais.cnpj) return null; // Ignora se for null ou não tiver CNPJ
+    if (!dadosIniciais || !dadosIniciais.cnpj) return null;
 
     const dadosEmpresa = await buscarDadosCNPJ(dadosIniciais.cnpj);
-    if (!dadosEmpresa) return { "Razão Social": dadosIniciais.razaoSocial, "CNPJ": dadosIniciais.cnpj, "Status": "Não Vencedor" };
+    if (!dadosEmpresa) return { "Razão Social": dadosIniciais.razaoSocial, "CNPJ": dadosIniciais.cnpj, "Status": dadosIniciais.status || "Não Vencedor" };
 
     const socioAdmin = dadosEmpresa.qsa?.find(s => s.qualificacao_socio.includes('Administrador')) || dadosEmpresa.qsa?.[0];
     const nomeDecisor = socioAdmin ? socioAdmin.nome_socio : "Não encontrado";
@@ -88,7 +75,7 @@ app.post('/analisar', async (req, res) => {
     return {
       "Razão Social": dadosEmpresa.razao_social,
       "CNPJ": dadosEmpresa.cnpj,
-      "Status": "Não Vencedor",
+      "Status": dadosIniciais.status || "Não Vencedor",
       "Decisor (Sócio)": nomeDecisor,
       "Busca Contato": socioAdmin ? `https://www.google.com/search?q=${encodeURIComponent(nomeDecisor)}+${encodeURIComponent(dadosEmpresa.razao_social)}+telefone+whatsapp` : "N/A",
       "Telefone Cadastrado": dadosEmpresa.ddd_telefone_1 || "N/A",
@@ -105,5 +92,5 @@ app.post('/analisar', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor do robô (VERSÃO FINAL COM FILTRO DE EXCLUSÃO) rodando na porta ${PORT}`);
+  console.log(`Servidor do robô (VERSÃO FINAL CORRIGIDA) rodando na porta ${PORT}`);
 });
